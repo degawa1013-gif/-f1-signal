@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>PS5対応 スタート信号</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; width: 100%; height: 100%; overflow: hidden;
+    background: #000; -webkit-tap-highlight-color: transparent;
+    font-family: system-ui, -apple-system, sans-serif;
+  }
+  .stage { position: fixed; inset: 0; background: #000; }
+  .lights {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    gap: min(2.5vw, 24px); padding: 5vw;
+  }
+  .light {
+    width: min(16vw, 190px); aspect-ratio: 1; border-radius: 50%;
+    background: #ff1010;
+    box-shadow: 0 0 24px #ff1010, 0 0 70px rgba(255,0,0,.85);
+    border: min(1vw, 10px) solid #260000;
+    transition: opacity .08s linear;
+  }
+  .green {
+    position: absolute; inset: 0;
+    background: #006b1b; opacity: 0; pointer-events: none;
+    transition: opacity .08s linear;
+  }
+  .tap { position: absolute; inset: 0; z-index: 10; cursor: pointer; }
+  .status {
+    position: fixed; left: 50%; bottom: max(14px, env(safe-area-inset-bottom));
+    transform: translateX(-50%); z-index: 20;
+    color: rgba(255,255,255,.5); font-size: 13px; text-align: center;
+    pointer-events: none; white-space: nowrap;
+  }
+  .unlock {
+    position: fixed; inset: 0; z-index: 30;
+    display: grid; place-items: center;
+    background: rgba(0,0,0,.78);
+    color: white; font-size: clamp(22px, 5vw, 42px); font-weight: 700;
+    text-align: center; padding: 24px;
+  }
+  .unlock small {
+    display: block; margin-top: 12px; font-size: .45em; font-weight: 500; opacity: .7;
+  }
+  @media (orientation: portrait) {
+    .lights { flex-direction: column; gap: 2.5vh; padding: 4vh; }
+    .light { width: min(28vw, 16vh); }
+  }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="lights">
+    <div class="light"></div><div class="light"></div><div class="light"></div>
+    <div class="light"></div><div class="light"></div>
+  </div>
+  <div class="green" id="green"></div>
+  <div class="tap" id="tap"></div>
+</div>
+
+<div class="status" id="status">× START / ○ RESET</div>
+
+<div class="unlock" id="unlock">
+  1回タップして音を有効化
+  <small>その後はDualSenseの × でスタート / ○ でリセット</small>
+</div>
+
+<script>
+const lights = [...document.querySelectorAll('.light')];
+const green = document.getElementById('green');
+const tap = document.getElementById('tap');
+const status = document.getElementById('status');
+const unlock = document.getElementById('unlock');
+
+let running = false;
+let greenOn = false;
+let timers = [];
+let audioCtx = null;
+let soundReady = false;
+
+function initAudio() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  soundReady = true;
+  unlock.style.display = 'none';
+}
+
+function beep(freq, duration=0.12, volume=0.18) {
+  if (!soundReady || !audioCtx) return;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+
+  osc.type = 'square';
+  osc.frequency.value = freq;
+
+  const now = audioCtx.currentTime;
+  gain.gain.setValueAtTime(volume, now);
+  gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+
+  osc.start(now);
+  osc.stop(now + duration);
+}
+
+function clearTimers() {
+  timers.forEach(clearTimeout);
+  timers = [];
+}
+
+function resetSignal() {
+  clearTimers();
+  running = false;
+  greenOn = false;
+  green.style.opacity = '0';
+  lights.forEach(l => l.style.opacity = '1');
+}
+
+function startSignal() {
+  if (running || greenOn) return;
+  running = true;
+
+  const step = 450;
+
+  lights.forEach((light, i) => {
+    timers.push(setTimeout(() => {
+      light.style.opacity = '0';
+      beep(420, 0.10, 0.16);
+    }, step * (i + 1)));
+  });
+
+  timers.push(setTimeout(() => {
+    green.style.opacity = '1';
+    beep(880, 0.22, 0.20);
+    running = false;
+    greenOn = true;
+  }, step * 5 + 250));
+}
+
+unlock.addEventListener('click', () => {
+  initAudio();
+  beep(660, 0.08, 0.10);
+});
+
+tap.addEventListener('click', () => {
+  if (!soundReady) initAudio();
+  if (greenOn) resetSignal();
+  else startSignal();
+});
+
+let lastButtons = [];
+
+function pollGamepad() {
+  const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+  const gp = [...pads].find(Boolean);
+
+  if (gp) {
+    status.textContent = 'DualSense接続中　× START / ○ RESET';
+
+    gp.buttons.forEach((btn, i) => {
+      const prev = lastButtons[i] || false;
+      const now = btn.pressed;
+
+      if (now && !prev) {
+        if (i === 0) startSignal();  // ×
+        if (i === 1) resetSignal();  // ○
+      }
+      lastButtons[i] = now;
+    });
+  } else {
+    status.textContent = 'コントローラー待機中';
+    lastButtons = [];
+  }
+
+  requestAnimationFrame(pollGamepad);
+}
+
+resetSignal();
+pollGamepad();
+</script>
+</body>
+</html>
