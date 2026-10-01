@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>PS5対応 スタート信号 緑切替版</title>
+<style>
+  *{box-sizing:border-box}
+  html,body{
+    margin:0;width:100%;height:100%;overflow:hidden;background:#000;
+    font-family:system-ui,-apple-system,sans-serif;-webkit-tap-highlight-color:transparent
+  }
+  .stage{position:fixed;inset:0;background:#000}
+  .lights{
+    position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    gap:min(2.5vw,24px);padding:5vw
+  }
+  .light{
+    width:min(16vw,190px);aspect-ratio:1;border-radius:50%;
+    background:#ff1010;box-shadow:0 0 30px #ff1010,0 0 90px rgba(255,0,0,.95);
+    border:min(1vw,10px) solid #260000;transition:opacity .08s linear
+  }
+  .green{
+    position:absolute;inset:0;opacity:0;pointer-events:none;transition:opacity .08s linear;
+    background:#006b1b;
+  }
+  .green.normal{ background:#006b1b; }
+  .green.neon{ background:#39ff14; }
+
+  .controls{
+    position:fixed;z-index:30;left:50%;bottom:max(18px,env(safe-area-inset-bottom));
+    transform:translateX(-50%);display:flex;gap:10px;flex-wrap:wrap;justify-content:center;
+    max-width:95vw
+  }
+  button{
+    border:0;border-radius:999px;padding:14px 18px;font-size:17px;font-weight:700;
+    background:#fff;color:#000
+  }
+  .status{
+    position:fixed;z-index:30;left:50%;top:max(14px,env(safe-area-inset-top));
+    transform:translateX(-50%);color:#fff;background:rgba(0,0,0,.55);
+    padding:9px 14px;border-radius:999px;font-size:14px;white-space:nowrap;max-width:92vw;
+    overflow:hidden;text-overflow:ellipsis
+  }
+  @media (orientation:portrait){
+    .lights{flex-direction:column;gap:2.5vh;padding:4vh}
+    .light{width:min(28vw,16vh)}
+    button{font-size:15px;padding:12px 14px}
+  }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="lights">
+    <div class="light"></div><div class="light"></div><div class="light"></div>
+    <div class="light"></div><div class="light"></div>
+  </div>
+  <div class="green normal" id="green"></div>
+</div>
+
+<div class="status" id="status">音未初期化 / DualSense待機 / 緑: 通常</div>
+
+<div class="controls">
+  <button id="soundTest">🔊 音テスト</button>
+  <button id="startBtn">START</button>
+  <button id="resetBtn">RESET</button>
+  <button id="greenModeBtn">緑: 通常</button>
+</div>
+
+<script>
+const lights=[...document.querySelectorAll('.light')];
+const green=document.getElementById('green');
+const status=document.getElementById('status');
+const greenModeBtn=document.getElementById('greenModeBtn');
+
+let ctx=null;
+let master=null;
+let timers=[];
+let running=false;
+let greenOn=false;
+let lastButtons=[];
+let greenMode=localStorage.getItem("greenMode") || "normal";
+
+function applyGreenMode(){
+  green.classList.remove("normal","neon");
+  green.classList.add(greenMode);
+  const label = greenMode==="neon" ? "緑: 蛍光" : "緑: 通常";
+  greenModeBtn.textContent = label;
+  updateStatus();
+  localStorage.setItem("greenMode", greenMode);
+}
+
+function updateStatus(extra=""){
+  const audioText = (ctx && ctx.state==="running") ? "音声ON" : "音未初期化";
+  const padText = [...(navigator.getGamepads ? navigator.getGamepads() : [])].find(Boolean)
+    ? "DualSense接続"
+    : "DualSense待機";
+  const greenText = greenMode==="neon" ? "緑: 蛍光" : "緑: 通常";
+  status.textContent = [audioText, padText, greenText, extra].filter(Boolean).join(" / ");
+}
+
+async function ensureAudio(){
+  if(!ctx){
+    ctx=new (window.AudioContext||window.webkitAudioContext)();
+    master=ctx.createGain();
+    master.gain.value=0.75;
+    master.connect(ctx.destination);
+  }
+  if(ctx.state!=="running"){
+    await ctx.resume();
+  }
+  updateStatus();
+  return ctx.state==="running";
+}
+
+function tone(freq=700,duration=.35,volume=.75){
+  if(!ctx||ctx.state!=="running") return;
+  const o=ctx.createOscillator();
+  const g=ctx.createGain();
+  o.type="square";
+  o.frequency.setValueAtTime(freq,ctx.currentTime);
+  g.gain.setValueAtTime(volume,ctx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+duration);
+  o.connect(g); g.connect(master);
+  o.start();
+  o.stop(ctx.currentTime+duration);
+}
+
+async function soundTest(){
+  const ok=await ensureAudio();
+  updateStatus(ok ? "音テストOK" : "音声開始失敗");
+  tone(660,.45,.9);
+  setTimeout(()=>tone(880,.45,.9),520);
+}
+
+function clearTimers(){timers.forEach(clearTimeout);timers=[]}
+
+function resetSignal(){
+  clearTimers();
+  running=false; greenOn=false;
+  green.style.opacity="0";
+  lights.forEach(l=>l.style.opacity="1");
+  updateStatus("RESET");
+}
+
+async function startSignal(){
+  if(running||greenOn) return;
+  await ensureAudio();
+  running=true;
+  updateStatus("START");
+  const step=500;
+  lights.forEach((light,i)=>{
+    timers.push(setTimeout(()=>{
+      light.style.opacity="0";
+      tone(430,.18,.8);
+    },step*(i+1)));
+  });
+  timers.push(setTimeout(()=>{
+    green.style.opacity="1";
+    tone(950,.5,.9);
+    running=false; greenOn=true;
+    updateStatus(greenMode==="neon" ? "GO(蛍光)" : "GO(通常)");
+  },step*5+250));
+}
+
+function toggleGreenMode(){
+  greenMode = greenMode==="normal" ? "neon" : "normal";
+  applyGreenMode();
+  if (ctx && ctx.state==="running") {
+    tone(greenMode==="neon" ? 1000 : 780, .18, .7);
+  }
+}
+
+document.getElementById("soundTest").addEventListener("click",soundTest);
+document.getElementById("startBtn").addEventListener("click",startSignal);
+document.getElementById("resetBtn").addEventListener("click",resetSignal);
+greenModeBtn.addEventListener("click",toggleGreenMode);
+
+window.addEventListener("gamepadconnected",()=>updateStatus("コントローラー接続"));
+window.addEventListener("gamepaddisconnected",()=>updateStatus("コントローラー切断"));
+
+function poll(){
+  const pads=navigator.getGamepads?navigator.getGamepads():[];
+  const gp=[...pads].find(Boolean);
+  if(gp){
+    gp.buttons.forEach((b,i)=>{
+      const prev=lastButtons[i]||false;
+      if(b.pressed&&!prev){
+        if(i===0) startSignal();      // ×
+        if(i===1) resetSignal();      // ○
+        if(i===2) toggleGreenMode();  // □
+        if(i===3) soundTest();        // △
+      }
+      lastButtons[i]=b.pressed;
+    });
+  }else{
+    lastButtons=[];
+  }
+  requestAnimationFrame(poll);
+}
+
+applyGreenMode();
+resetSignal();
+updateStatus();
+poll();
+</script>
+</body>
+</html>
